@@ -102,14 +102,20 @@ void create_root();
 unsigned short allocateInode();
 void update_root_directory(const char *v6FileName, unsigned short v6File_iNumber);
 unsigned short get_free_data_block();
+int find_v6file_from_current_dir(const char *v6FileName, int rootDataBlock);
+void rm(const char *v6FileName);
+void makeDir(const char *v6FileDir);
 void cpin(const char *externalFileName, const char *v6FileName);
 void cpout(const char *v6File, const char *externalFile);
 
 int cpout_num_of_blocks = 0;
+int v6FileEntry;
+short current_directory_inummber;
+int current_directory_datablock;
+
 
 int main()
 {
-
     char input[INPUT_SIZE];
     char *splitter;
     unsigned int numBlocks = 0, numInodes = 0;
@@ -118,6 +124,7 @@ int main()
     printf("Enter command:\n");
 
     char *externalFile, *v6File;
+    char *v6FileName, *v6FileDir;
 
     while (1)
     {
@@ -142,20 +149,29 @@ int main()
         { //if the user input is equal to "cpin"
             externalFile = strtok(NULL, " ");
             v6File = strtok(NULL, " ");
-            cpin(externalFile, v6File);       
+            cpin(externalFile, v6File);
         }
         else if (strcmp(splitter, "cpout") == 0)
-        { 
+        {
             v6File = strtok(NULL, " ");
             externalFile = strtok(NULL, " ");
             cpout(v6File, externalFile);
+        }
+        else if (strcmp(splitter, "rm") == 0)
+        {
+            v6FileName = strtok(NULL, " ");
+            rm(v6FileName);
+        }
+        else if (strcmp(splitter, "makeDir") == 0)
+        {
+            v6FileDir = strtok(NULL, " ");
+            makeDir(v6FileDir);
         }
     }
 }
 
 int preInitialization()
 {
-
     char *n1, *n2;
     unsigned int numBlocks = 0, numInodes = 0;
     char *filepath;
@@ -271,15 +287,16 @@ void add_block_to_free_list(int block_number, unsigned int *empty_buffer)
     { //if the free list is COMPLETELY free, nfree is the number of free elements in the free array
 
         int free_list_data[BLOCK_SIZE / 4], i;
-        free_list_data[0] = FREE_SIZE; //the first element of the free array = FREE_SIZE
+        free_list_data[0] = FREE_SIZE; //the first 4 bytes contains nfree = FREE_SIZE
 
-        for (i = 0; i < BLOCK_SIZE / 4; i++)
+        //initialize the remaining 1020 bytes of this data block
+        for (i = 0; i < BLOCK_SIZE / 4; i++) //run 256 times
         {
-            if (i < FREE_SIZE)
+            if (i < FREE_SIZE) // TRUE for 152 times, the first 608 bytes contains the data block numbers
             {
                 free_list_data[i + 1] = superBlock.free[i]; //assign unallocated blocks
             }
-            else
+            else //remaining 412 bytes contain 0 (103 zeroes, 4bytes each)
             {
                 free_list_data[i + 1] = 0; // getting rid of junk data in the remaining unused bytes of header block
             }
@@ -312,6 +329,9 @@ void create_root()
     root.filename[0] = '.'; //double check tuesday's lecture
     root.filename[1] = '\0';
 
+    current_directory_inummber = root.inode;
+    current_directory_datablock = root_data_block;
+
     inode.flags = inode_alloc_flag | dir_flag | dir_large_file | dir_access_rights; // flag for root directory
     inode.nlinks = 0;
     inode.uid = 0;
@@ -341,8 +361,344 @@ void create_root()
 
     write(fileDescriptor, &root, 16);
 }
+//------------------------HELPER FUNCTIONS---------------------------------------
+int find_v6file_from_current_dir(const char *v6FileName, int current_directory_datablock)
+{
+    lseek(fileDescriptor, current_directory_datablock * BLOCK_SIZE, SEEK_SET); // lseek to root directory data block of the file system.
+
+    // Loop through the directory where each directory entry is 16-bytes and check each entry's 14 byte name string. ----------------------------
+    // Find the beginning of the 16 byte entries and read the i-node number from the first two bytes and the file name from the next 14 bytes. --
+    // NOTE: loop through 1024/16 or 64 times (total number of entries possible for a directory data block) -------------------------------------
+
+    unsigned char dirEntry[16]; // Buffer for the read function to read into.
+
+    int i;
+    for (i = 0; i < 16; i++)
+    {
+        dirEntry[i] = '\0';
+    }
+
+    int isNameSame = 1;
+    int entryNum = 0;
+    int foundMatch = 0;
+    while (entryNum < 64 && foundMatch == 0)
+    { // Loop while the directory entry name is different from the user v6File input.
+        read(fileDescriptor, dirEntry, 16);
+
+        // Use a pointer assigned to the address of dirEntry 2 bytes in, and use it to compare to the v6File input.
+        unsigned char *fileName = &dirEntry[2];
+
+        // Loop through both strings to see if all characters match. If not, set isNameSame to false and break out of the loop.
+        // If either string hits a null char before the end of the loop, break out of the loop.
+        for (i = 0; i < 13; i++)
+        {
+            if (fileName[i] != v6FileName[i])
+            { // Catches for any differing characaters or length.
+                isNameSame = 0;
+                break;
+            }
+            else if (fileName[i] == '\0' && v6FileName[i] == '\0')
+            {
+                foundMatch = 1;
+                isNameSame = 1;
+                v6FileEntry = entryNum;
+                break; // Catches when identical strings both end.
+            }
+        }
+        entryNum++;
+    }
+    entryNum = 0;
+
+    // Get the i-node number if the two strings matched.
+    unsigned short inodeNum;
+    if (isNameSame)
+        inodeNum = (dirEntry[1] << 8) | dirEntry[0]; // Use bitwise OR operation to get the first two bytes into a short.
+    else
+    {
+        printf("\nThe file '%s' does not exist in the root directory!\n", v6FileName);
+        return;
+    }
+
+    printf("inodeNum from root directory: %d\n\n", inodeNum);
+
+    return inodeNum;
+}
 
 //---------------------------IMPLENTATIONS BELOW------------------------------
+/*
+Function: rm
+---------------
+Description: removes a file from the v6 file system
+Parameters: v6FileName - Name of the v6 file to be removed from this filesystem
+            
+*/
+void rm(const char *v6FileName)
+{
+    //remove all the data blocks of the v6 file to free
+    // - Free the data block from free array?
+    //get block numbers assigned to this v6 file
+    int i;
+    printf("\nFinding this file's inode number...");
+    //lseek to the v6 file's inode number
+    int v6_Inode_number = find_v6file_from_current_dir(v6FileName, current_directory_datablock);
+
+    //if a directory, then see if it has any files or subdirectories
+    //throw error if not an empty directory
+    printf("\nGoing to this file's address array to get block numbers...");
+    //if a file, lseek to the i-node's addr array directly (addr[] starts 12 bytes into the i-node)
+    lseek(fileDescriptor, 2 * BLOCK_SIZE + v6_Inode_number * INODE_SIZE + 12, SEEK_SET);
+
+    //get the address array associated with this v6 file
+    printf("\nGetting address array from this file...");
+    unsigned int addrArray[ADDR_SIZE];
+    read(fileDescriptor, &addrArray, 44);
+
+    //create an empty buffer and allocate to the v6 file's data blocks
+    printf("\nEmptying the data blocks...");
+    unsigned int empty_buffer[BLOCK_SIZE / 4];
+    for (i = 0; i < BLOCK_SIZE / 4; i++)
+        empty_buffer[i] = 0;
+    for (i = 0; i < ADDR_SIZE; i++)
+    {
+        add_block_to_free_list(addrArray[i], empty_buffer); //add datablocks to free array
+    }
+    printf("\nfinished emptying the data blocks...");
+    //free the inode
+    printf("\nFreeing the inode used for %s...", v6FileName);
+    unsigned int buffer[INODE_SIZE / 4];
+    for (i = 0; i < INODE_SIZE / 4; i++)
+    {
+        buffer[i] = 0;
+    }
+
+    lseek(fileDescriptor, 2 * BLOCK_SIZE + v6_Inode_number * INODE_SIZE, SEEK_SET);
+    write(fileDescriptor, &buffer, INODE_SIZE);
+
+    //remove this file from the parent directory
+    printf("\nRemoving %s from the parent directory...", v6FileName);
+    lseek(fileDescriptor, current_directory_datablock * BLOCK_SIZE + (v6FileEntry * 16), SEEK_SET); // lseek to root directory data block of the file system.
+    write(fileDescriptor, &buffer, 16);
+    printf("\nDeleted %s\n", v6FileName);
+
+    //DEBUG---------print out all the non-empty entries in the current directory--------------START
+    printf("\n\t\tTESTING RM: Print all entries in the current directory", current_directory_inummber);
+    printf("\nCurrent Directory Inode: %d", current_directory_inummber);
+
+    unsigned int dir_addr;
+    //go to the current directory's inode block and grab addr[0]
+
+    lseek(fileDescriptor, (2 * BLOCK_SIZE) + ((current_directory_inummber - 1) * INODE_SIZE) + 12, SEEK_SET);
+    read(fileDescriptor, &dir_addr, 4); //read in the data block number assigned to addr[0]
+
+    //go to the data block number assigned to addr[0]
+    lseek(fileDescriptor, (dir_addr * BLOCK_SIZE), SEEK_SET);
+
+    //empty buffer
+    int dir_entry_buffer[4];
+    for (i = 0; i < 4; i++)
+        dir_entry_buffer[i] = 0;
+    printf("\nCreated empty buffer to read in every non-empty directory entry.");
+
+    int count = 1;
+    printf("\nEntering loop to print all entries");
+    unsigned short entry_inode;       //holds the inumber of the current directory entry
+    unsigned char entry_filename[14]; //holds the filename of the current directory entry
+
+    do
+    {
+        printf("\nFinding...");
+        read(fileDescriptor, &entry_inode, 2); //read in 2 bytes for i-node number
+        read(fileDescriptor, entry_filename, 14);
+        printf("\n\tentry %d - i-node %d - filename %s\n", count, entry_inode, entry_filename);
+        count++;
+    } while (entry_inode != 0 && count <= 64);
+}
+
+/*
+Function: mkdir v6dir
+---------------
+Description: create a directory from the v6 file system
+Parameters: v6FileDir - Name of the v6 file directory to be added to this filesystem
+*/
+void makeDir(const char *v6FileDir)
+{
+    int i;
+    int length = 0;
+
+    while (v6FileDir[length] != '\0') //count length up until null terminating char
+    {
+        length++; //maximum length = 13
+    }
+    printf("\nFile's size: %d", length);
+
+    if (length > 13) //length of 13 since not counting null terminating char
+    {
+        printf("\nV6 Directory Name is too large! Must be < 14 characters\n");
+    }
+    else
+    {
+        printf("\nFetch inumber for directory...");
+        superBlock.ninode--;
+        printf("\nsuperBlock.ninode: %d", superBlock.inode);
+        unsigned short v6Dir_inumber = superBlock.inode[superBlock.ninode];
+        printf("\ndirectory inumber Fetched: %d", v6Dir_inumber);
+        //create inode
+        printf("\nCreating inode....");
+        inode_type v6Dir_inode;
+        v6Dir_inode.flags = inode_alloc_flag | dir_flag | dir_large_file | dir_access_rights; // flag for directory
+        v6Dir_inode.nlinks = 0;
+        v6Dir_inode.size = INODE_SIZE;
+        v6Dir_inode.uid = 0;
+        v6Dir_inode.gid = 0;
+        superBlock.nfree--;
+        v6Dir_inode.addr[0] = superBlock.free[superBlock.nfree];
+        for (i = 1; i < ADDR_SIZE; i++)
+        {
+            v6Dir_inode.addr[i] = 0;
+        }
+        v6Dir_inode.actime[0] = 0;
+        v6Dir_inode.modtime[0] = 0;
+        v6Dir_inode.modtime[1] = 0;
+        printf("\nWriting inode to filesystem...");
+        lseek(fileDescriptor, (2 * BLOCK_SIZE) + (v6Dir_inumber * INODE_SIZE), SEEK_SET);
+        write(fileDescriptor, &v6Dir_inode, INODE_SIZE);
+        //assign a free inode to this directory file
+        //lseek to first current directory entry that is not '.' and '..'
+        printf("\nGo to the beginning of the third entry of the current directory");
+        lseek(fileDescriptor, (2 + superBlock.isize) * BLOCK_SIZE + 32, SEEK_SET);
+
+        unsigned int dir_entry_buffer[4]; //empty buffer for a single entry in the root directory
+        for (i = 0; i < 4; i++)           //init 16 bytes of buffer to null
+            dir_entry_buffer[i] = 0;
+
+        printf("\nCreated empty buffer to use for finding a empty directory entry.");
+
+        i = 0;
+        int isFull = 1;
+        int count = 0;
+        printf("\nEntering loop to find an empty entry");
+        while (isFull)
+        {
+            i = 0;
+            printf("\nFinding...");
+            read(fileDescriptor, &dir_entry_buffer, 16); //read in 16 bytes (directory entry size) at a time to check if empty or not
+            while (dir_entry_buffer[i] == 0 && i < 4)
+            {
+                printf("\n\ti counter: %d", i);
+                i++;
+            }
+            if (i == 4)
+            {
+                printf("\nFound empty directory space: %d. Breaking out of loop.", count);
+                isFull = 0;
+                i = 0;
+                break;
+            }
+            count++;
+        }
+        //------------------------beginning of root's third entry--plus-offset to the next empty entry
+        printf("\nAssigning the inode number and name to entry spot.");
+        dir_type v6DirEntry;
+        v6DirEntry.inode = v6Dir_inumber;
+        printf("\n\n\tChecking every filename character\n");
+        printf("\n\tInput filename should be: %s", v6FileDir);
+        strcpy(v6DirEntry.filename, v6FileDir);
+
+        printf("\n\tCreated v6 directory's name: %s", v6DirEntry.filename);
+
+        if (v6DirEntry.filename[0] == '\0')
+        {
+            printf("\n\tnew filename is empty!!", v6DirEntry.filename);
+        }
+
+        lseek(fileDescriptor, (2 + superBlock.isize) * BLOCK_SIZE + 32 + (16 * count), SEEK_SET); //go to the first empty directory entry in root
+        write(fileDescriptor, &v6DirEntry, 16);
+
+        printf("\nFinished assigning inode number and name into root directory.");
+
+        //---------------Fill content of the new directory's data block---------------------
+        //go to the data block of the directory and write '.' and '..' directory entries
+        printf("\nAssigning the '.' and '..' entries to the newly created directory.");
+
+        lseek(fileDescriptor, v6Dir_inode.addr[0] * BLOCK_SIZE, SEEK_SET);
+        v6DirEntry.inode = v6Dir_inumber; //first . entry referring to itself
+        v6DirEntry.filename[0] = '.';
+        v6DirEntry.filename[1] = '\0';
+        write(fileDescriptor, &v6DirEntry, 16);
+
+        v6DirEntry.inode = current_directory_inummber; //second .. entry referring to its parent
+        v6DirEntry.filename[0] = '.';
+        v6DirEntry.filename[1] = '.';
+        v6DirEntry.filename[2] = '\0';
+        write(fileDescriptor, &v6DirEntry, 16);
+
+        printf("\nDirectory %s created in the root.\n", v6FileDir);
+
+        //DEBUG---------print out all the non-empty entries in the current directory--------------START
+        printf("\nCurrent Directory Inode: %d", current_directory_inummber);
+
+        unsigned int dir_addr;
+        //go to the current directory's inode block and grab addr[0]
+
+        lseek(fileDescriptor, (2 * BLOCK_SIZE) + ((current_directory_inummber - 1) * INODE_SIZE) + 12, SEEK_SET);
+        read(fileDescriptor, &dir_addr, 4); //read in the data block number assigned to addr[0]
+
+        //go to the data block number assigned to addr[0]
+        lseek(fileDescriptor, (dir_addr * BLOCK_SIZE), SEEK_SET);
+
+        //empty buffer
+        for (i = 0; i < 4; i++)
+            dir_entry_buffer[i] = 0;
+        printf("\nCreated empty buffer to read in every non-empty directory entry.");
+
+        count = 1;
+        printf("\nEntering loop to print all entries");
+        unsigned short entry_inode;       //holds the inumber of the current directory entry
+        unsigned char entry_filename[14]; //holds the filename of the current directory entry
+
+        do
+        {
+            printf("\nFinding...");
+            read(fileDescriptor, &entry_inode, 2); //read in 2 bytes for i-node number
+            read(fileDescriptor, entry_filename, 14);
+            printf("\n\tentry %d - i-node %d - filename %s\n", count, entry_inode, entry_filename);
+            count++;
+        } while (entry_inode != 0 && count <= 64);
+    }
+}
+
+
+/*
+Function: cd
+---------------
+Description: change working directory of the v6 file system to the v6Dir
+Parameters: filepath to move into
+*/
+void cd(const char* filepath)
+{
+    filepath = "/user/dir/file"
+    char * token; 
+    int rootDataBlock = 2 + superBlock.isize;
+    int filepath_inumber;
+    if(filepath[0] == '/') //absolute path
+    {
+        
+        lseek(fileDescriptor, rootDataBlock * BLOCK_SIZE, SEEK_SET);
+        do {
+            token = strtok(filepath, "/");  // Start passed the first '/'
+            filepath_inumber = find_v6file_from_current_dir(token, current_directory_datablock);
+            lseek(fileDescriptor, (2*BLOCK_SIZE) + ((filepath_inumber - 1)*INODE_SIZE) + 12, SEEK_SET);  //go to the start of addr array
+            read(fileDescriptor, &current_directory_datablock, 4);
+            lseek(fileDescriptor, (current_directory_datablock * BLOCK_SIZE), SEEK_SET);
+
+        }while(token != NULL); 
+        
+    } else {  //goto path relative to the current working directory 
+        filepath_inumber = find_v6file_from_current_dir(filepath, current_directory_datablock);
+
+    }
+
+}
 
 /*
 Function: cpin
@@ -353,45 +709,58 @@ Parameters: externalFileName - Name of the external file to be copied from
 */
 void cpin(const char *externalFileName, const char *v6FileName)
 {
+    int length = 1;
+
+    while (v6FileName[length - 1] != '\0') //count length up until null terminating char
+    {
+        length++; //maximum length = 13
+    }
+
+    if (length > 13) //legnth > 13 because we are counting length exlcuding null char
+    {
+        printf("\nV6 Filename is too large! Must be <= 14 characters");
+    }
+    else
+    {
         //printf("\nInside cpin...");
-    //-----VARIABLES----------------
+        //-----VARIABLES----------------
         int v6File_fdes, exFile_fdes;
         int i, j;
         //-----------------------------
         unsigned int buffer[BLOCK_SIZE / 4]; //buffer used to transfer data between files via read
-        
-    //allocate new inode for new v6 file START
+
+        //allocate new inode for new v6 file START
         printf("\nFetch inumber...");
         unsigned short inumber;
-        superBlock.ninode--; 
+        superBlock.ninode--;
         inumber = superBlock.inode[superBlock.ninode];
         unsigned short v6File_inumber = inumber;
         printf("\ninumber Fetched: %d", inumber);
-    //------------------------------------END
-    //--get statistics of external file START
+        //------------------------------------END
+        //--get statistics of external file START
         printf("\nFetch external file's statistics...");
         unsigned short exFile_size;
         struct stat exFile_Statistics;
         stat(externalFileName, &exFile_Statistics); //get external file characteristics such as inode number, file size, etc... (see stat linux)
-        exFile_size = exFile_Statistics.st_size; //get size of external file
-    //------------------------------------ END
-    //---Create new inode for new v6 file and write to file system START
+        exFile_size = exFile_Statistics.st_size;    //get size of external file
+                                                    //------------------------------------ END
+                                                    //---Create new inode for new v6 file and write to file system START
         inode_type v6File_inode;
         v6File_inode.flags = inode_alloc_flag | dir_access_rights | plain_file; //second flag = 000777 (dir_acess_rights)?
         v6File_inode.size = exFile_size;
         v6File_inode.uid = 0;
         v6File_inode.gid = 0;
-        printf("\nExternal file's size: %d", exFile_size); 
-        int numOfBlocks_allocated; 
+        printf("\nExternal file's size: %d", exFile_size);
+        int numOfBlocks_allocated;
         //number of blocks that need to be allocated for the new v6 file (should match with the external file)
-        if ((exFile_size % BLOCK_SIZE) == 0)             
-            numOfBlocks_allocated = (exFile_size / BLOCK_SIZE);  
-        else                                              
-            numOfBlocks_allocated = (exFile_size / BLOCK_SIZE) + 1; 
-        
-        //printf("\nnumOfBlocks_allocated: %d", numOfBlocks_allocated); 
+        if ((exFile_size % BLOCK_SIZE) == 0)
+            numOfBlocks_allocated = (exFile_size / BLOCK_SIZE);
+        else
+            numOfBlocks_allocated = (exFile_size / BLOCK_SIZE) + 1;
+
+        //printf("\nnumOfBlocks_allocated: %d", numOfBlocks_allocated);
         cpout_num_of_blocks = numOfBlocks_allocated; //to be used in cpout for loop
-        //printf("\ncpout_num_of_blocks: %d", cpout_num_of_blocks); 
+        //printf("\ncpout_num_of_blocks: %d", cpout_num_of_blocks);
 
         unsigned short free_block; //block number to be assigned to address array
         //get free data blocks for v6 file and sest the block numbers to the address array of its inode
@@ -403,31 +772,32 @@ void cpin(const char *externalFileName, const char *v6FileName)
             //printf("\nAssigning free block %d to inode's addr[]", free_block);
             superBlock.free[superBlock.nfree] = 0; //now this block is not free anymore as it has been allocated
             v6File_inode.addr[i] = free_block;
-            
         }
         printf("\nFinished assigning free blocks to v6file, now writing inode to file system....");
         //write inode to file system
         lseek(fileDescriptor, (2 * BLOCK_SIZE) + (v6File_inumber * INODE_SIZE), SEEK_SET);
         write(fileDescriptor, &v6File_inode, INODE_SIZE);
-    //------------------------------------ END
+        //------------------------------------ END
         printf("\nFinished writing inode to file system, now adding v6 file to root directory...");
-    //--Add the newly created v6 file to root directory (inumber 2bytes, filename 14 bytes) START
+        //--Add the newly created v6 file to root directory (inumber 2bytes, filename 14 bytes) START
         int rootDataBlock = 2 + superBlock.isize;
         lseek(fileDescriptor, rootDataBlock * BLOCK_SIZE + 32, SEEK_SET); //skip the first two entries in root
-        write(fileDescriptor, &v6File_inumber, 2); //2 = sizeof(v6File_inumber)
-        write(fileDescriptor, v6FileName, 14); //14 = sizeof(v6FileName)
+        write(fileDescriptor, &v6File_inumber, 2);                        //2 = sizeof(v6File_inumber)
+        write(fileDescriptor, v6FileName, 14);                            //14 = sizeof(v6FileName)
         printf("\nFinished updating root directory...");
-    //------------------------------------------------------------------------------------ END
-        
-    //update superblock's inode array?
+        //------------------------------------------------------------------------------------ END
 
-    //--now copy the external file's content to this newly created v6 file START
-    printf("\n------------COPYING CONTENT FROM EXTERNAL FILE TO V6 FILE START--------------------");
+        //update superblock's inode array?
+
+        //--now copy the external file's content to this newly created v6 file START
+        printf("\n------------COPYING CONTENT FROM EXTERNAL FILE TO V6 FILE START--------------------");
         exFile_fdes = open(externalFileName, O_RDONLY);
-        if(exFile_fdes == -1)
+        if (exFile_fdes == -1)
         {
             printf("\nUnable to open external file");
-        } else {
+        }
+        else
+        {
             printf("\nExternal File opened sucessfully!");
             printf("\n------Start copying now.....--------");
             for (j = 0; j < numOfBlocks_allocated; j++)
@@ -444,7 +814,8 @@ void cpin(const char *externalFileName, const char *v6FileName)
         }
         printf("\nFinished copying, closing external file....\n\n");
         close(exFile_fdes);
-    //-------------------------------------------------------------- END
+        //-------------------------------------------------------------- END
+    }
 }
 
 /*
@@ -470,6 +841,18 @@ void cpout(const char *v6File, const char *externalFile)
     * 6.) Write the data in the blocks to the externalFile blocks.
     **/
 
+    int length = 1;
+
+    while (v6File[length - 1] != '\0') //count length up until null terminating char
+    {
+        length++; //maximum length = 13
+    }
+
+    if (length > 13)
+    { //length > 13 because we are counting length up to the null char (exclusive)
+        printf("\nV6 file name is too long! Must be less than 14 characters! [%s]\n", strerror(errno));
+    }
+
     //----- Open the externalFile and getting its fileDescriptor --------------------------------------------------------------------------------
 
     int rootDataBlock = 2 + superBlock.isize;
@@ -481,73 +864,18 @@ void cpout(const char *v6File, const char *externalFile)
         printf("\nopen() failed with error [%s]\n", strerror(errno));
     }
 
-   //-----END------------------------------------------------------------------------------------------------------------------------------------
+    //-----END------------------------------------------------------------------------------------------------------------------------------------
 
-   //-----Compare the two file names-------------------------------------------------------------------------------------------------------------
+    //-----Compare the two file names-------------------------------------------------------------------------------------------------------------
 
-   lseek(fileDescriptor, rootDataBlock * BLOCK_SIZE, SEEK_SET); // lseek to root directory data block of the file system.
-
-    // Loop through the directory where each directory entry is 16-bytes and check each entry's 14 byte name string. ----------------------------
-    // Find the beginning of the 16 byte entries and read the i-node number from the first two bytes and the file name from the next 14 bytes. --
-    // NOTE: loop through 1024/16 or 64 times (total number of entries possible for a directory data block) -------------------------------------
-    
-    unsigned char dirEntry[16]; // Buffer for the read function to read into.
-
-    int i;
-      for (i = 0; i < 16; i++)
-      {
-        dirEntry[i] = '\0';
-      }
-
-    int isNameSame = 1;
-    int entryNum = 0;
-    int foundMatch = 0;
-    while (entryNum < 64 && foundMatch == 0)
-    { // Loop while the directory entry name is different from the user v6File input.
-        read(fileDescriptor, dirEntry, 16);
-
-        // Use a pointer assigned to the address of dirEntry 2 bytes in, and use it to compare to the v6File input.
-        unsigned char *fileName = &dirEntry[2];
-
-        // Loop through both strings to see if all characters match. If not, set isNameSame to false and break out of the loop.
-        // If either string hits a null char before the end of the loop, break out of the loop.
-        for (i = 0; i < 13; i++)
-        {
-            if (fileName[i] != v6File[i])
-            { // Catches for any differing characaters or length.
-                isNameSame = 0;
-                break;
-            }
-            else if (fileName[i] == '\0' && v6File[i] == '\0') {
-                foundMatch = 1;
-                isNameSame = 1;
-                break; // Catches when identical strings both end.
-            }
-        }
-        printf("\n");
-        entryNum++;
-    }
-    entryNum = 0;
-
-    // Get the i-node number if the two strings matched.
-    unsigned short inodeNum;
-    if (isNameSame)
-        // TODO: Double check this inodeNum assignment.
-        inodeNum = (dirEntry[1] << 8) | dirEntry[0]; // Use bitwise OR operation to get the first two bytes into a short.
-    else
-    {
-        printf("\nThe file '%s' does not exist in the root directory!\n", v6File);
-        return;
-    }
-
-    printf("inodeNum from root directory: %d\n\n", inodeNum);
+    int inodeNum = find_v6file_from_current_dir(v6File, rootDataBlock);
 
     //-----END-----------------------------------------------------------------------------------------------------------------------------------
 
-   //------Get information on the file to copy from----------------------------------------------------------------------------------------------
-   
+    //------Get information on the file to copy from----------------------------------------------------------------------------------------------
+
     // Go to the i-node number that we just got and the corresponding addr array.
-    lseek(fileDescriptor, 2*BLOCK_SIZE + inodeNum*INODE_SIZE, SEEK_SET);
+    lseek(fileDescriptor, 2 * BLOCK_SIZE + inodeNum * INODE_SIZE, SEEK_SET);
 
     // Get the i-node field flag information (2 bytes).
     unsigned short *flagFields;
@@ -565,17 +893,16 @@ void cpout(const char *v6File, const char *externalFile)
     unsigned int addrArray[ADDR_SIZE];
 
     read(fileDescriptor, &addrArray, 44); // Array is int addr[11] so total 44 bytes need to be read.
-    
+
     //-----END-----------------------------------------------------------------------------------------------------------------------------------
 
     //-----Copying v6 file into external file----------------------------------------------------------------------------------------------------
-    
+
     // Use the addrArray created to find the addresses of the blocks that the data is in.
     // Get the stats of the externalFile to use when writing.
     struct stat exFile_Statistics;
     stat(externalFile, &exFile_Statistics);
-    
-    
+
     unsigned int buffer[256];
     int k;
     for (k = 0; k < cpout_num_of_blocks; k++)
@@ -583,9 +910,9 @@ void cpout(const char *v6File, const char *externalFile)
         lseek(fileDescriptor, addrArray[k] * BLOCK_SIZE, SEEK_SET);
         read(fileDescriptor, &buffer, BLOCK_SIZE);
         lseek(externFileDes, BLOCK_SIZE * k, SEEK_SET);
-        write(externFileDes, &buffer, fileSize);    // Only write out the number of bytes needed for the fileSize.
+        write(externFileDes, &buffer, fileSize); // Only write out the number of bytes needed for the fileSize.
     }
-    
+
     close(externFileDes);
 
     //-----END-----------------------------------------------------------------------------------------------------------------------------------
