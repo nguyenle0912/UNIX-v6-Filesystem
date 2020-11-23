@@ -12,17 +12,6 @@
 Step 1) Create a file test.txt (vi test.txt). Type in anything (e.g. "test")
 Step 2) Create a blank file copy.txt (vi copy.txt). Leave it blank
 Step 3) Compile and run ./fsaccess 
-
-EXAMPLE EXECUTION:
-    1) vi test.txt 
-        a) Type any string (e.g "test")
-        b) e
- 
- This program allows user to do two things: 
-   1. initfs: Initilizes the file system and redesigning the Unix file system to accept large 
-      files of up tp 4GB, expands the free array to 152 elements, expands the i-node array to 
-      200 elemnts, doubles the i-node size to 64 bytes and other new features as well.
-   2. Quit: save all work and exit the program.
    
  User Input (based on the PRE SETUP above):
      - initfs (file path) (# of total system blocks) (# of System i-nodes)
@@ -299,10 +288,9 @@ int initfs(char *path, unsigned short blocks, unsigned short inodes)
 // Assigning Data blocks to free list
 void add_block_to_free_list(int block_number, unsigned int *empty_buffer)
 {
-
     if (superBlock.nfree == FREE_SIZE)
     { //if the free list is COMPLETELY free, nfree is the number of free elements in the free array
-
+        
         int free_list_data[BLOCK_SIZE / 4], i;
         free_list_data[0] = FREE_SIZE; //the first 4 bytes contains nfree = FREE_SIZE
 
@@ -453,11 +441,11 @@ int find_v6file_from_current_dir(const char *v6FileName, int current_directory_d
         inodeNum = (dirEntry[1] << 8) | dirEntry[0]; // Use bitwise OR operation to get the first two bytes into a short.
     else
     {
-        printf("\nThe file '%s' does not exist in the current directory!\n", v6FileName);
+        printf("\nThe file '%s' does not exist in the current directory!--------\n\n", v6FileName);
         return -1;
     }
 
-    printf("\ninodeNum returned from current directory: %d\n\n", inodeNum);
+    printf("\ninodeNum returned from current directory: %d -----------------\n\n", inodeNum);
 
     return inodeNum;
 }
@@ -492,7 +480,7 @@ void ls()
         printf("\nFinding...");
         read(fileDescriptor, &entry_inode, 2); //read in 2 bytes for i-node number
         read(fileDescriptor, entry_filename, 14);
-        printf("\n\tentry %d - i-node %d - filename %s - current directory's datablock %d\n", count, entry_inode, entry_filename, dir_addr);
+        printf("\n\tentry %d - i-node %d - filename %s - current directory's datablock %d\n\n", count, entry_inode, entry_filename, dir_addr);
         count++;
     } while (entry_inode != 0 && count <= 64);
 }
@@ -530,11 +518,10 @@ void rm(char *v6FileName)
             length = 0;
         }
     }
-    printf("\nFile's size: %d", length);
 
     if (length > 13) //length of 13 since not counting null terminating char
     {
-        printf("\nV6 Directory Name is too large! Must be < 14 characters\n");
+        printf("\nV6 Directory Name is too large! Must be < 14 characters-------------------\n\n");
     }
     else
     {
@@ -549,6 +536,12 @@ void rm(char *v6FileName)
             {
                 printf("\nSubdirectory %d) %s", i, subDir_filename);
                 filepath_inumber = find_v6file_from_current_dir(subDir_filename, local_current_directory_datablock); //grab this file's entry in the current directory's datablock with
+                //exit if invalid file path
+                if (filepath_inumber == -1) {
+                    printf("Exiting rm...------------------------------------------------\n\n");
+                    return;
+                }
+                
                 printf("\n\tFound file %s with inode %d in the current directory dataBlock: %d)",
                        subDir_filename, filepath_inumber, local_current_directory_datablock);
                 //---go to the sub directory's inode to get addr[0], the directory's first data block
@@ -557,7 +550,7 @@ void rm(char *v6FileName)
                 read(fileDescriptor, &local_current_directory_datablock, 4); //update current directory's datablock
                 local_current_directory_inumber = filepath_inumber;          //update current directory's file inod
                 strcpy(local_current_directory_filename, subDir_filename);   //update current directory's file name
-                printf("\n\t\tCurrently in directory %s...", local_current_directory_filename);
+                printf("\n\t\tCurrently in directory %s", local_current_directory_filename);
                 subDir_filename = strtok(NULL, "/");
                 strcpy(new_dir_filename, subDir_filename);
                 i++;
@@ -577,9 +570,14 @@ void rm(char *v6FileName)
         int i;
         printf("\nFinding this file's inode number...");
         //lseek to the v6 file's inode number
-        int v6_Inode_number = find_v6file_from_current_dir(v6FileName, local_current_directory_datablock);
+        int v6_Inode_number = find_v6file_from_current_dir(new_dir_filename, local_current_directory_datablock);
         //if a directory, then see if it has any files or subdirectories
         //throw error if not an empty directory
+        if (v6_Inode_number == -1) {
+            printf("Exiting rm function...------------------------------------------\n\n");
+            return;
+        }
+        
         //if a file, lseek to the i-node's addr array directly (addr[] starts 12 bytes into the i-node)
         //get the address array associated with this v6 file
         printf("\nGoing to this file's address array to get block numbers...");
@@ -595,9 +593,19 @@ void rm(char *v6FileName)
             empty_buffer[i] = 0;
         for (i = 0; i < ADDR_SIZE; i++)
         {
-            add_block_to_free_list(addrArray[i], empty_buffer); //add datablocks to free array
+            if(addrArray[i] != 0){
+                add_block_to_free_list(addrArray[i], empty_buffer); //add datablocks to free array
+            }
         }
         printf("\nfinished emptying the data blocks...");
+//DEBUG 
+        // int k; 
+        // printf("\n\t\t\t---PRINT OUT FREE ARRAY CONTENTS----");
+        // for(k = 0; k < FREE_SIZE; k++)
+        // {
+        //     printf("\n\t\tFree Index %d: Block Number: %d", k, superBlock.free[k]);
+        // }
+        
         //free the inode
         printf("\nFreeing the inode used for %s...", v6FileName);
         unsigned int buffer[INODE_SIZE / 4];
@@ -644,7 +652,7 @@ void rm(char *v6FileName)
             printf("\nFinding...");
             read(fileDescriptor, &entry_inode, 2); //read in 2 bytes for i-node number
             read(fileDescriptor, entry_filename, 14);
-            printf("\n\tentry %d - i-node %d - filename %s\n", count, entry_inode, entry_filename);
+            printf("\n\tentry %d - i-node %d - filename %s - current directory's datablock %d\n", count, entry_inode, entry_filename, dir_addr);
             count++;
         } while (entry_inode != 0 && count <= 64);
     }
@@ -684,7 +692,7 @@ void makeDir(char *v6FileDir)
 
     if (length > 13) //length of 13 since not counting null terminating char
     {
-        printf("\nV6 Directory Name is too large! Must be < 14 characters\n");
+        printf("\nV6 Directory Name is too large! Must be < 14 characters-------------------\n");
     }
     else
     {
@@ -699,6 +707,12 @@ void makeDir(char *v6FileDir)
             {
                 printf("\nSubdirectory %d) %s", i, subDir_filename);
                 filepath_inumber = find_v6file_from_current_dir(subDir_filename, local_current_directory_datablock); //grab this file's entry in the current directory's datablock with
+                //exit if invalid file path
+                if (filepath_inumber == -1) {
+                    printf("Exiting makeDir...----------------------------------------------\n\n");
+                    return;
+                }
+                
                 printf("\n\tFound file %s with inode %d in the current directory dataBlock: %d)",
                        subDir_filename, filepath_inumber, local_current_directory_datablock);
                 //---go to the sub directory's inode to get addr[0], the directory's first data block
@@ -707,7 +721,7 @@ void makeDir(char *v6FileDir)
                 read(fileDescriptor, &local_current_directory_datablock, 4); //update current directory's datablock
                 local_current_directory_inumber = filepath_inumber;          //update current directory's file inod
                 strcpy(local_current_directory_filename, subDir_filename);   //update current directory's file name
-                printf("\n\t\tCurrently in directory %s...", local_current_directory_filename);
+                printf("\n\t\tCurrently in directory %s", local_current_directory_filename);
                 subDir_filename = strtok(NULL, "/");
                 strcpy(new_dir_filename, subDir_filename);
                 i++;
@@ -719,6 +733,14 @@ void makeDir(char *v6FileDir)
             local_current_directory_datablock = current_directory_datablock;
             local_current_directory_inumber = current_directory_inumber;
             strcpy(new_dir_filename, v6FileDir);
+        }
+
+        //check if directory already exists; -1 if yes
+        int does_dir_exist = find_v6file_from_current_dir(new_dir_filename, local_current_directory_datablock);
+        if (does_dir_exist != -1)
+        {
+            printf("\n\nThe directory %s already exists!\n\n", new_dir_filename);
+            return;
         }
 
         printf("\nFetch inumber for directory...");
@@ -818,7 +840,7 @@ void makeDir(char *v6FileDir)
         v6DirEntry.filename[2] = '\0';
         write(fileDescriptor, &v6DirEntry, 16);
 
-        printf("\nDirectory %s created in the root.\n", v6FileDir);
+        printf("\nDirectory %s created in the root.\n\n", v6FileDir);
 
         //DEBUG---------print out all the non-empty entries in the current directory--------------START
         ls();
@@ -850,6 +872,12 @@ void cd(char *filepath)
             printf("\nSubdirectory %d) %s", i, subDir_filename);
             i++;
             filepath_inumber = find_v6file_from_current_dir(subDir_filename, current_directory_datablock); //grab this file's entry in the current directory's datablock with
+            //exit if invalid file path
+            if (filepath_inumber == -1) {
+                    printf("Exiting cd...---------------------------------------------------\n\n");
+                    return;
+                }
+            
             printf("\n\tFound file %s with inode %d in the current directory (name: %s/inode: %d/dataBlock: %d)",
                    subDir_filename, filepath_inumber, current_directory_filename, current_directory_inumber, current_directory_datablock);
             //---go to the sub directory's inode to get addr[0], the directory's first data block
@@ -858,7 +886,7 @@ void cd(char *filepath)
             read(fileDescriptor, &current_directory_datablock, 4); //update current directory's datablock
             current_directory_inumber = filepath_inumber;          //update current directory's file inod
             strcpy(current_directory_filename, subDir_filename);   //update current directory's file name
-            printf("\n\t\tCurrently in directory %s...", current_directory_filename);
+            printf("\n\t\tCurrently in directory %s\n\n", current_directory_filename);
             subDir_filename = strtok(NULL, "/");
         } while (subDir_filename != NULL && filepath_inumber != -1);
     }
@@ -869,8 +897,10 @@ void cd(char *filepath)
         filepath_inumber = find_v6file_from_current_dir(filepath, current_directory_datablock);
 
         printf("\nFinished execution of find_v6file_from_current_dir\n\n");
-        if (filepath_inumber == -1)
+        if (filepath_inumber == -1) {
+            printf("Exiting cd...---------------------------------------------------\n\n");
             return;
+        }
 
         current_directory_inumber = filepath_inumber; //update current directory's file inode
         printf("\n\nCopying subdirectory name '%s' into current_directory_filename...\n\n", filepath);
@@ -878,7 +908,7 @@ void cd(char *filepath)
         current_directory_datablock = find_v6fileDataBlock_from_current_dir(current_directory_inumber, 0);
         //lseek(fileDescriptor, (2*BLOCK_SIZE) + ((current_directory_inumber - 1)*INODE_SIZE) + 12, SEEK_SET);
         //read(fileDescriptor, &current_directory_datablock, 4); //update current directory's datablock
-        printf("\n\nCurrent directory: %s of address block %d\n\n", filepath, current_directory_datablock);
+        printf("\n\nCurrent directory: %s ----------------------------------------\n\n", filepath, current_directory_datablock);
     }
 }
 
@@ -940,6 +970,12 @@ void cpin(const char *externalFileName, char *v6FileName)
             {
                 printf("\nSubdirectory %d) %s", i, subDir_filename);
                 filepath_inumber = find_v6file_from_current_dir(subDir_filename, local_current_directory_datablock); //grab this file's entry in the current directory's datablock with
+                //exit if invalid file path
+                if (filepath_inumber == -1) {
+                    printf("Exiting cpin...-------------------------------------------------\n\n");
+                    return;
+                }
+                
                 printf("\n\tFound file %s with inode %d in the current directory dataBlock: %d)",
                        subDir_filename, filepath_inumber, local_current_directory_datablock);
                 //---go to the sub directory's inode to get addr[0], the directory's first data block
@@ -948,7 +984,7 @@ void cpin(const char *externalFileName, char *v6FileName)
                 read(fileDescriptor, &local_current_directory_datablock, 4); //update current directory's datablock
                 local_current_directory_inumber = filepath_inumber;          //update current directory's file inod
                 strcpy(local_current_directory_filename, subDir_filename);   //update current directory's file name
-                printf("\n\t\tCurrently in directory %s...", local_current_directory_filename);
+                printf("\n\t\tCurrently in directory %s\n\n", local_current_directory_filename);
                 subDir_filename = strtok(NULL, "/");
                 strcpy(new_filename, subDir_filename);
                 i++;
@@ -968,6 +1004,14 @@ void cpin(const char *externalFileName, char *v6FileName)
         }
         else
         {
+            //check if file name already exists; -1 if yes
+            int does_file_exist = find_v6file_from_current_dir(new_filename, local_current_directory_datablock);
+            if (does_file_exist != -1)
+            {
+                printf("\n\nThe file %s already exists!\n\n", new_filename);
+                return;
+            }
+
             //printf("\nInside cpin...");
             //-----VARIABLES----------------
             int v6File_fdes, exFile_fdes;
@@ -1168,6 +1212,12 @@ void cpout(char *v6File, const char *externalFile)
             {
                 printf("\nSubdirectory %d) %s", i, subDir_filename);
                 filepath_inumber = find_v6file_from_current_dir(subDir_filename, local_current_directory_datablock); //grab this file's entry in the current directory's datablock with
+                //exit if invalid file path
+                if (filepath_inumber == -1) {
+                    printf("Exiting cpout...------------------------------------------------\n\n");
+                    return;
+                }
+
                 printf("\n\tFound file %s with inode %d in the current directory dataBlock: %d)",
                        subDir_filename, filepath_inumber, local_current_directory_datablock);
                 //---go to the sub directory's inode to get addr[0], the directory's first data block
@@ -1176,7 +1226,7 @@ void cpout(char *v6File, const char *externalFile)
                 read(fileDescriptor, &local_current_directory_datablock, 4); //update current directory's datablock
                 local_current_directory_inumber = filepath_inumber;          //update current directory's file inod
                 strcpy(local_current_directory_filename, subDir_filename);   //update current directory's file name
-                printf("\n\t\tCurrently in directory %s...", local_current_directory_filename);
+                printf("\n\t\tCurrently in directory %s\n\n", local_current_directory_filename);
                 subDir_filename = strtok(NULL, "/");
                 strcpy(new_filename, subDir_filename);
                 i++;
@@ -1188,6 +1238,7 @@ void cpout(char *v6File, const char *externalFile)
             local_current_directory_datablock = current_directory_datablock;
             local_current_directory_inumber = current_directory_inumber;
             strcpy(new_filename, v6File);
+            int inodeNum = find_v6file_from_current_dir(new_filename, local_current_directory_datablock);
         }
 
         if (length > 13)
@@ -1210,6 +1261,10 @@ void cpout(char *v6File, const char *externalFile)
         //-----Compare the two file names-------------------------------------------------------------------------------------------------------------
 
         int inodeNum = find_v6file_from_current_dir(new_filename, local_current_directory_datablock);
+        if (inodeNum == -1) {
+                printf("Exiting cpout...----------------------------------------------------\n\n");
+                return;
+        }
 
         //-----END-----------------------------------------------------------------------------------------------------------------------------------
 
